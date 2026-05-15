@@ -13,6 +13,10 @@ Layout mirrors the "EXPECTED OUTPUT (in exe file)" diagram from the brief:
     +-----------------------------------------------------------+
 
 With the Results panel on the right side (split view).
+
+The left pane is wrapped in a QScrollArea so the CTA stays reachable
+even on short displays. A visible gap separates the left and right panes
+via a styled QSplitter handle.
 """
 
 from __future__ import annotations
@@ -21,17 +25,20 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from app.config import APP_CONFIG
+from app.ui.theme.colors import PALETTE as P
 from app.ui.widgets.image_dropzone import ImageDropZone
 from app.ui.widgets.measurement_panel import MeasurementPanel
 from app.ui.widgets.results_panel import ResultsPanel
@@ -52,13 +59,41 @@ class ClassificationTab(QWidget):
         outer.setSpacing(16)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        splitter.setObjectName("classifySplitter")
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(1)
+        splitter.setHandleWidth(16)             # ← visible gap between panes
+        splitter.setStyleSheet(
+            # The handle is the visible gap; the panes themselves are flush against it.
+            f"""
+            QSplitter#classifySplitter {{
+                background-color: transparent;
+            }}
+            QSplitter#classifySplitter::handle {{
+                background-color: transparent;
+                margin: 0 6px;
+            }}
+            QSplitter#classifySplitter::handle:hover {{
+                background-color: {P.border};
+                border-radius: 2px;
+            }}
+            """
+        )
 
-        # ---------- LEFT: inputs ----------
+        # ---------- LEFT: scrollable input area ----------
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # The scrollbar lives inside the left pane; make it visually subtle.
+        left_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
         left = QWidget()
+        left.setObjectName("classifyLeftPane")
         left_l = QVBoxLayout(left)
-        left_l.setContentsMargins(0, 0, 0, 0)
+        left_l.setContentsMargins(2, 2, 8, 2)   # small right inset so content doesn't hug scrollbar
         left_l.setSpacing(14)
 
         # Header
@@ -72,7 +107,7 @@ class ClassificationTab(QWidget):
             "measurements. The AI will classify the foot type and recommend "
             "an insole configuration."
         )
-        h_hint.setStyleSheet("color: #9BA4B5; font-size: 12px;")
+        h_hint.setStyleSheet(f"color: {P.text_secondary}; font-size: 12px;")
         h_hint.setWordWrap(True)
         header.addWidget(h_sub)
         header.addWidget(h_title)
@@ -88,7 +123,7 @@ class ClassificationTab(QWidget):
         for z in (self.zone_lateral, self.zone_top, self.zone_back):
             img_row.addWidget(z, 1)
             z.image_changed.connect(self._update_cta_state)
-        left_l.addLayout(img_row, 1)
+        left_l.addLayout(img_row)
 
         # Measurements
         self.meas_panel = MeasurementPanel()
@@ -118,7 +153,11 @@ class ClassificationTab(QWidget):
         cta_row.addWidget(self.cta)
 
         left_l.addLayout(cta_row)
-        splitter.addWidget(left)
+        # Trailing stretch so content sits at the top, not centered.
+        left_l.addStretch(1)
+
+        left_scroll.setWidget(left)
+        splitter.addWidget(left_scroll)
 
         # ---------- RIGHT: results ----------
         self.results = ResultsPanel()

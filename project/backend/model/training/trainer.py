@@ -69,11 +69,25 @@ class Trainer:
         logger.info("Model: {} params on {}", f"{n_params:,}", self.device)
 
         # --------- Loss ---------
+        # SAFE class-frequency weighting. Previous version did 1/count which
+        # exploded to inf for classes with zero samples in the training
+        # split, poisoning the cross-entropy gradient and producing absurd
+        # loss values (~20+) instead of the expected ln(num_classes) ≈ 1.6.
+        #
+        # Empty classes get weight 0 so they contribute nothing to the loss
+        # (the model can't learn what's not there). Non-empty classes are
+        # normalised so the mean weight across all non-empty classes is 1.
+        raw = []
+        for name in CLASS_NAMES:
+            c = max(0, train_counts.get(name, 0))
+            raw.append(0.0 if c == 0 else 1.0 / c)
+        present = [w for w in raw if w > 0]
+        scale = (sum(present) / len(present)) if present else 1.0
         weights = torch.tensor(
-            [1.0 / max(1, train_counts.get(name, 0)) for name in CLASS_NAMES],
-            dtype=torch.float32,
+            [w / scale if w > 0 else 0.0 for w in raw], dtype=torch.float32
         ).to(self.device)
-        weights = weights / weights.mean()
+        logger.info("Class weights: {}", {n: round(w.item(), 3) for n, w in zip(CLASS_NAMES, weights)})
+
         self.criterion = MultiTaskLoss(
             num_classes=self.model_cfg.num_classes,
             cls_weight=train_cfg.cls_loss_weight,

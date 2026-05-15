@@ -45,6 +45,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+    # ─── CRITICAL FOR PYTORCH DATALOADER ──────────────────────────────
+    # Default container /dev/shm is only 64 MB. PyTorch DataLoader workers
+    # use shared memory to pass tensors between processes; ML workloads
+    # blow past 64 MB easily. 4 GB is plenty for batch_size=16 at 256×256.
+    shm_size: "4gb"
+    # ─────────────────────────────────────────────────────────────────
+
+    # Cap CPU/memory so a runaway training job can't starve the host.
+    # Adjust to taste — your host has 16 CPUs / 15 GB RAM.
+    deploy:
+      resources:
+        limits:
+          cpus: "12"
+          memory: "10g"
+
     environment:
       APP_ENV: production
       LOG_LEVEL: INFO
@@ -55,6 +71,11 @@ services:
       DATA_DIR: /workspace/data
       UPLOAD_DIR: /workspace/data/uploads
       DEFAULT_CHECKPOINT_PATH: /workspace/backend/model/checkpoints/best.pt
+      # Force DataLoader workers to 0 inside containers — Albumentations
+      # + spawn-based workers + WSL2 bind mounts is a fragile combo and
+      # gains us nothing on CPU. Single-process loading is plenty fast
+      # for a ~1,000-sample dataset.
+      INSOLE_FORCE_WORKERS: "0"
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -71,10 +92,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    shm_size: "4gb"
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-insole_admin}:${POSTGRES_PASSWORD:-change_me_securely}@db:5432/${POSTGRES_DB:-insole_db}
       DATA_DIR: /workspace/data
       PYTHONPATH: /workspace
+      INSOLE_FORCE_WORKERS: "0"
     volumes:
       - ./data:/workspace/data
       - ./backend/model/checkpoints:/workspace/backend/model/checkpoints

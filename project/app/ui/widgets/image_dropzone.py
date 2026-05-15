@@ -3,6 +3,10 @@ ImageDropZone — a tile that lets the user drop or click-to-browse an image.
 
 Looks like the "INSERT IMAGE" placeholders in the brief's EXPECTED OUTPUT
 mockup, with a small caption underneath (Lateral / Top / Back).
+
+The tile now has a small "×" remove button in the top-right corner that
+appears only when an image is loaded. Clicking it unloads the image
+without re-triggering the file-browse dialog.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QLabel,
+    QPushButton,
     QVBoxLayout,
 )
 
@@ -24,7 +29,7 @@ ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 class ImageDropZone(QFrame):
     """A drag-and-drop / click-to-browse image tile."""
 
-    image_changed = Signal(str)  # absolute path
+    image_changed = Signal(str)  # absolute path, or "" when cleared
 
     def __init__(self, view_label: str, hint: str = "Drop image here or click", parent=None):
         super().__init__(parent)
@@ -66,6 +71,35 @@ class ImageDropZone(QFrame):
         self.hint_label.setStyleSheet("color: #5D6779; font-size: 10px;")
         layout.addWidget(self.hint_label)
 
+        # --- Remove button (overlay, hidden until an image is loaded) ---
+        # Parented to `self` so it floats above the layout. We position it
+        # manually in resizeEvent.
+        self.remove_btn = QPushButton("×", self)
+        self.remove_btn.setObjectName("dropzoneRemove")
+        self.remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remove_btn.setToolTip("Remove image")
+        self.remove_btn.setFixedSize(28, 28)
+        self.remove_btn.setStyleSheet(
+            """
+            QPushButton#dropzoneRemove {
+                background-color: rgba(11, 14, 20, 0.85);
+                color: #E6EAF2;
+                border: 1px solid #324C7A;
+                border-radius: 14px;
+                font-size: 16px;
+                font-weight: 700;
+                padding: 0;
+            }
+            QPushButton#dropzoneRemove:hover {
+                background-color: #E5484D;
+                border-color: #E5484D;
+                color: white;
+            }
+            """
+        )
+        self.remove_btn.clicked.connect(self._on_remove_clicked)
+        self.remove_btn.hide()
+
     # ------------------------------------------------------------------ API
     @property
     def image_path(self) -> str | None:
@@ -76,6 +110,7 @@ class ImageDropZone(QFrame):
         self.preview.setText("INSERT\nIMAGE")
         self.preview.setPixmap(QPixmap())
         self.setProperty("filled", False)
+        self.remove_btn.hide()
         self._refresh_style()
         self.image_changed.emit("")
 
@@ -87,6 +122,9 @@ class ImageDropZone(QFrame):
         self._image_path = path_str
         self._update_preview(pix)
         self.setProperty("filled", True)
+        self.remove_btn.show()
+        self.remove_btn.raise_()
+        self._position_remove_btn()
         self._refresh_style()
         self.image_changed.emit(path_str)
 
@@ -103,9 +141,23 @@ class ImageDropZone(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def _position_remove_btn(self) -> None:
+        """Place the remove button in the top-right corner with 8 px inset."""
+        x = self.width() - self.remove_btn.width() - 8
+        y = 8
+        self.remove_btn.move(x, y)
+
+    def _on_remove_clicked(self) -> None:
+        # Don't propagate to mousePressEvent (which would open the file dialog).
+        self.clear()
+
     # ------------------------------------------------------ DnD + click
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            # Ignore clicks landing on the remove button — it has its own handler.
+            if self.remove_btn.isVisible() and self.remove_btn.geometry().contains(event.pos()):
+                super().mousePressEvent(event)
+                return
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 f"Select {self._view_label} view image",
@@ -145,6 +197,8 @@ class ImageDropZone(QFrame):
             pix = QPixmap(self._image_path)
             if not pix.isNull():
                 self._update_preview(pix)
+        if self.remove_btn.isVisible():
+            self._position_remove_btn()
         super().resizeEvent(event)
 
     # -------------------------------------------------------------- helpers

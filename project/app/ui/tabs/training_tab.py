@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -47,13 +48,38 @@ class TrainingTab(QWidget):
         outer.setSpacing(16)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        splitter.setObjectName("trainSplitter")
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(1)
+        splitter.setHandleWidth(16)
+        splitter.setStyleSheet(
+            f"""
+            QSplitter#trainSplitter {{
+                background-color: transparent;
+            }}
+            QSplitter#trainSplitter::handle {{
+                background-color: transparent;
+                margin: 0 6px;
+            }}
+            QSplitter#trainSplitter::handle:hover {{
+                background-color: {P.border};
+                border-radius: 2px;
+            }}
+            """
+        )
 
-        # ---------- LEFT: config ----------
+        # ---------- LEFT: scrollable config area ----------
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        left_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
         left = QWidget()
         left_l = QVBoxLayout(left)
-        left_l.setContentsMargins(0, 0, 0, 0)
+        left_l.setContentsMargins(2, 2, 8, 2)
         left_l.setSpacing(14)
 
         # Header
@@ -66,7 +92,7 @@ class TrainingTab(QWidget):
             "<i>data/</i>. The pipeline expects subfolders "
             "<i>Heel/, Flat/, Normal/, Sheet/</i> per the project brief."
         )
-        h_hint.setStyleSheet("color: #9BA4B5; font-size: 12px;")
+        h_hint.setStyleSheet(f"color: {P.text_secondary}; font-size: 12px;")
         h_hint.setWordWrap(True)
         h_hint.setTextFormat(Qt.TextFormat.RichText)
         left_l.addWidget(h_sub)
@@ -89,7 +115,7 @@ class TrainingTab(QWidget):
         data_l.addLayout(row)
 
         self.scan_label = QLabel("Click 'Scan dataset' to inspect contents.")
-        self.scan_label.setStyleSheet("color: #9BA4B5; font-size: 11px;")
+        self.scan_label.setStyleSheet(f"color: {P.text_secondary}; font-size: 11px;")
         self.scan_label.setWordWrap(True)
         data_l.addWidget(self.scan_label)
 
@@ -179,7 +205,8 @@ class TrainingTab(QWidget):
         left_l.addLayout(chips)
 
         left_l.addStretch()
-        splitter.addWidget(left)
+        left_scroll.setWidget(left)
+        splitter.addWidget(left_scroll)
 
         # ---------- RIGHT: console ----------
         right = QWidget()
@@ -278,8 +305,6 @@ class TrainingTab(QWidget):
 
     def _on_stop(self) -> None:
         if self._worker and self._worker.isRunning():
-            # Cooperative stop: Qt cannot kill the Python interpreter mid-step
-            # safely. We just disable the button and inform the user.
             QMessageBox.information(
                 self,
                 "Stop requested",
