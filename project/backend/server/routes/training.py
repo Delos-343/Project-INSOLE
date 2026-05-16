@@ -8,6 +8,7 @@ TrainingRun.history column so the GUI can poll for live updates.
 
 from __future__ import annotations
 
+import shutil
 import threading
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,46 +25,27 @@ from backend.database.schemas import TrainingRequest, TrainingStatusOut
 from backend.model.config import ModelConfig, TrainingConfig
 
 router = APIRouter()
-
-# Track active background trainers so we can prevent duplicates.
 _active_runs: dict[str, threading.Thread] = {}
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def _config_to_jsonable(cfg: Any) -> dict:
-    """Convert a dataclass (or any object with __dict__) to a JSON-safe dict.
-
-    Dataclass fields like ``data_dir: Path`` are not natively JSON-encodable;
-    PostgreSQL's JSON column rejects them. We coerce non-primitive values to
-    strings so they round-trip cleanly through the JSON column.
-    """
     out: dict = {}
     for k, v in cfg.__dict__.items():
         if v is None or isinstance(v, (bool, int, float, str)):
             out[k] = v
         elif isinstance(v, (list, dict)):
-            out[k] = v  # assume already JSON-safe
+            out[k] = v
         else:
-            out[k] = str(v)  # Path, Literal, Enum, etc.
+            out[k] = str(v)
     return out
 
 
-# ---------------------------------------------------------------------------
-# Background trainer thread
-# ---------------------------------------------------------------------------
 def _run_training_thread(run_id: str, training_cfg: TrainingConfig, model_cfg: ModelConfig) -> None:
-    """Run the trainer; update DB row with progress + outcome."""
-    from backend.model.training.trainer import Trainer  # local import keeps cold-start cheap
+    from backend.model.training.trainer import Trainer
 
     with db_session() as db:
         TrainingRunRepository(db).mark_running(run_id)
 
-    # ----- progress callback -----
-    # Every epoch_end, append the metrics to the row's `history` JSON
-    # column. The GUI polls GET /api/training/runs/{id} every couple of
-    # seconds and emits new entries as `epoch_done` signals.
     def progress_cb(payload: dict) -> None:
         if payload.get("type") != "epoch_end":
             return
@@ -89,15 +71,24 @@ def _run_training_thread(run_id: str, training_cfg: TrainingConfig, model_cfg: M
         trainer = Trainer(training_cfg, model_cfg, progress_cb=progress_cb)
         result = trainer.fit()
 
-        # Move best.pt -> stable path keyed by run id.
         out_dir = Path(training_cfg.output_dir)
         best_src = out_dir / "best.pt"
-        best_dst = out_dir / f"run_{run_id}.pt"
+
+        # ── CRITICAL FIX ──────────────────────────────────────────────
+        # Previously we did best_src.replace(best_dst), which DELETED
+        # best.pt by renaming it to run_<uuid>.pt. The Predictor then
+        # looked for best.pt, didn't find it, and silently ran on random
+        # weights. Now we COPY (not move): best.pt stays as the canonical
+        # checkpoint the Predictor always loads, and we additionally keep
+        # a run-tagged archival copy.
+        # ──────────────────────────────────────────────────────────────
+        checkpoint_path = str(best_src)
         if best_src.exists():
+            run_archive = out_dir / f"run_{run_id}.pt"
             try:
-                best_src.replace(best_dst)
-            except Exception:
-                pass
+                shutil.copy2(best_src, run_archive)
+            except Exception as exc:
+                logger.warning("Could not archive run checkpoint: {}", exc)
 
         with db_session() as db:
             TrainingRunRepository(db).mark_completed(
@@ -107,10 +98,10 @@ def _run_training_thread(run_id: str, training_cfg: TrainingConfig, model_cfg: M
                 macro_f1=result["test_metrics"].get("macro_f1"),
                 total_epochs=len(result["history"]),
                 history=result["history"],
-                checkpoint_path=str(best_dst if best_dst.exists() else best_src),
+                checkpoint_path=checkpoint_path,
                 model_version=f"v0.1.0+{run_id[:8]}",
             )
-        logger.info("Training run {} completed.", run_id)
+        logger.info("Training run {} completed. best.pt retained at {}", run_id, best_src)
 
     except Exception:
         logger.exception("Training run {} failed", run_id)
@@ -120,16 +111,12 @@ def _run_training_thread(run_id: str, training_cfg: TrainingConfig, model_cfg: M
         _active_runs.pop(run_id, None)
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 @router.post("/runs", response_model=TrainingStatusOut, status_code=202)
 async def start_training(
     req: TrainingRequest,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> TrainingStatusOut:
-    # Build configs from the request.
     training_cfg = TrainingConfig(
         data_dir=Path(req.data_dir) if req.data_dir else Path("data"),
         batch_size=req.batch_size,
@@ -142,7 +129,6 @@ async def start_training(
     )
     model_cfg = ModelConfig(use_generative_branch=req.use_generative_branch)
 
-    # IMPORTANT: serialise to JSON-safe dicts before writing the row.
     repo = TrainingRunRepository(db)
     row = repo.create(
         name=req.name,
@@ -150,13 +136,11 @@ async def start_training(
         model_config=_config_to_jsonable(model_cfg),
     )
 
-    # Kick off background thread.
     t = threading.Thread(
         target=_run_training_thread, args=(row.id, training_cfg, model_cfg), daemon=True
     )
     _active_runs[row.id] = t
     t.start()
-
     return _row_to_status(row)
 
 
