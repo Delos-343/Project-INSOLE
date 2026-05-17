@@ -1,33 +1,48 @@
 # Insole Foot Classification
 
-> AI-powered foot-classification system for insole recommendation.
-> Multi-view CNN + cross-modal fusion + generative VAE branch, with a
-> native desktop GUI, FastAPI service, PostgreSQL store, and Docker
-> orchestration.
+> Measurement-first foot-classification system for insole recommendation.
+> Deterministic clinical classification, with an assistive image-based
+> estimator, a native desktop GUI, a FastAPI service, a PostgreSQL store,
+> and Docker orchestration.
 
 ---
 
 ## What it does
 
-Given up to **three foot images** (lateral / top / back) and an optional
-set of clinical measurements, the system:
+Given an optional set of clinical measurements and up to **three foot
+images** (lateral / top / back), the system:
 
-1. Classifies the foot into one of **five clinical categories** — Severe
-   Flat Arch, Flat Arch, Normal Foot, High Arch, Severe High Arch.
-2. Predicts the **five clinical angles** from images alone if the user
-   doesn't provide them (calcaneal inclination, heel angle, arch height,
-   kite angle, 1st metatarsal–talus angle).
-3. Emits a **recommended insole configuration** (arch support height,
+1. **Classifies the foot into one of five clinical categories** — Severe
+   Flat Arch, Flat Arch, Normal Foot, High Arch, Severe High Arch —
+   defined by the project's arch-height bands (cm):
+   Severe Flat `< 2.7` · Flat `2.7–3.5` · Normal `3.6–5.5` ·
+   High `5.6–6.4` · Severe High `> 6.4`.
+2. Emits a **recommended insole configuration** (arch support height,
    heel cup depth, medial post strength, lateral wedge strength,
-   forefoot cushioning) sampled from the generative branch's
-   class-conditional manifold.
-4. Persists every result to PostgreSQL with full audit metadata.
+   forefoot cushioning) from the generative branch.
+3. Persists every result to PostgreSQL with full audit metadata,
+   **including which path produced it** (measured vs estimated).
 
-The target accuracy from the brief — **≥90% on unseen images** — is
-addressed by (a) per-view ImageNet-pretrained backbones, (b) cross-modal
-transformer fusion of views + measurements, (c) class-balanced sampling,
-(d) Albumentations augmentation, and (e) a multi-task loss with
-auxiliary measurement regression and VAE regularisation.
+### Two paths, clearly distinguished
+
+| Path | Trigger | Trust | Confidence |
+|---|---|---|---|
+| **Measured** (authoritative) | Arch-height measurement supplied | Deterministic; exact by construction | 100% |
+| **Estimated** (assistive) | No measurement — estimated from images | Approximate; **must be confirmed clinically** | Honest, sub-100% |
+
+The measured path applies the project's arch-height bands directly. It
+does **not** consult the neural network's class output, so it is exact by
+construction. The estimated path uses the model to estimate arch height
+from images and is **always flagged in the UI as non-authoritative**.
+
+> **Why measurement-first?** The original brief targeted ≥90%
+> *image-based* accuracy. Empirical diagnostics during development showed
+> arch height is **not visually recoverable** from the supplied photo
+> views (image-only accuracy ≈ 33%, with 0% recall on Normal and High),
+> while a deterministic rule on the measurement scores ≈ 100%. The
+> success criterion was formally revised accordingly. See
+> `Success_Criterion_Revision.docx` and `Verification_and_Test_Report.docx`
+> in the delivery package, both reproducible via the diagnostic scripts.
 
 ---
 
@@ -41,11 +56,11 @@ auxiliary measurement regression and VAE regularisation.
                 │  │      tab        │  │      tab      │   │
                 │  └────────┬────────┘  └────────┬──────┘   │
                 └───────────┼────────────────────┼──────────┘
-                            │ HTTP (local fallback in-proc) │
+                            │ HTTP (Docker backend; local fallback)
                             ▼                              ▼
                 ┌───────────────────────────┐   ┌──────────────────────┐
-                │   FastAPI service         │   │  In-process Trainer  │
-                │  /api/classify            │   │  (QThread worker)    │
+                │   FastAPI service         │   │  Training (threaded, │
+                │  /api/classify            │   │  in backend container)│
                 │  /api/training/runs       │   └──────────┬───────────┘
                 │  /api/data/summary        │              │
                 │  /api/patients            │              │
@@ -55,88 +70,121 @@ auxiliary measurement regression and VAE regularisation.
               ▼                       ▼         ▼                    ▼
        ┌─────────────┐        ┌─────────────┐  ┌──────────────┐  ┌────────┐
        │ Predictor   │        │ Repositories│  │ Multi-view   │  │ Data   │
-       │ (PyTorch)   │        │ (SQLAlchemy)│  │ Classifier   │  │ loader │
-       └──────┬──────┘        └──────┬──────┘  └──────┬───────┘  └────┬───┘
-              │                      │                │               │
-              ▼                      ▼                ▼               ▼
-       ┌─────────────┐        ┌─────────────────────────────────────────┐
-       │ Checkpoints │        │              PostgreSQL                 │
-       │  (volume)   │        │  patients · classifications ·           │
-       └─────────────┘        │  measurements · training_runs           │
-                              └─────────────────────────────────────────┘
+       │ measurement │        │ (SQLAlchemy)│  │ network      │  │ loader │
+       │ -first      │        └──────┬──────┘  └──────┬───────┘  └────┬───┘
+       └──────┬──────┘               │                │               │
+              │ rule on bands        ▼                ▼               ▼
+              │ (authoritative) ┌─────────────────────────────────────────┐
+       ┌─────────────┐          │              PostgreSQL                 │
+       │ Checkpoints │          │  patients · classifications ·           │
+       │  (volume)   │          │  measurements · training_runs           │
+       └─────────────┘          └─────────────────────────────────────────┘
 ```
 
-### Model topology
+### Model role (honest description)
+
+The network is **not** the classifier for the core deliverable. The
+deterministic rule is. The network's verified, value-adding roles are:
+
+- **Image → measurement estimation** — an assistive pre-fill when no
+  measurement is supplied (approximate; flagged non-authoritative).
+- **Generative insole-config head** — class-conditional insole
+  recommendation.
 
 ```
-   Lateral ─┐                                       ┌─► logits (5 classes)
-   Top  ────┼─► [ViewEncoder × 3]                   │
-   Back ────┘        │                              │
-                     ▼                              │
-              MultiModalFusion ──► fused (B, 512) ──┼─► insole_config (5)
-                     ▲                              │
-   Measurements ─────┘                              ├─► measurements_hat (5)
-   (+ mask)                                         │
-                                                    └─► VAE (recon, μ, logσ²)
-                                                          ↑ class-conditional
-                                                            generative branch
+   Lateral ─┐
+   Top  ────┼─► [ViewEncoder × 3]
+   Back ────┘        │
+                     ▼
+              MultiModalFusion ──► fused embedding ──┬─► measurements_hat (5)
+                     ▲                               ├─► insole_config (5)
+   Measurements ─────┘                               └─► logits (assistive only)
+   (+ mask)
 ```
 
-- Per-view encoders are `timm` models (default: EfficientNet-B0).
-- Fusion is a small transformer over 4 tokens (3 views + 1 measurement)
-  with learned role embeddings.
-- The VAE branch operates *in the fused-embedding space* — cheap, and
-  doubles as feature-space mixup augmentation during training.
+The estimated-path classification is computed by applying the same
+arch-height rule to the model's *estimated* arch height — never taken
+directly from `logits`, which diagnostics showed are unreliable for this
+data.
 
 ---
 
-## Quick start
-
-### Option A — Local Python (fastest iteration)
+## Quick start (Docker — the supported path)
 
 ```bash
-# 1. Create env + install deps
-make install          # or: python -m venv .venv && pip install -r requirements.txt
+cp .env.example .env          # set POSTGRES_PASSWORD; POSTGRES_PORT if 5432 is taken
 
-# 2. (Optional) Start Postgres in Docker
-docker compose up -d db
-
-# 3. (Optional) Apply migrations — only if you started Postgres
-make migrate
-
-# 4. Launch the desktop GUI
-make app
-```
-
-The GUI's "Classification" tab works out of the box even without a
-trained model (random initialisation). To train:
-
-```bash
-# Copy or rsync your dataset into ./data/  (mirroring Drive layout)
-make train EPOCHS=50 BATCH_SIZE=16
-```
-
-### Option B — Docker (production-ish)
-
-```bash
-cp .env.example .env
-
+# Build & start db + backend
 docker compose up -d --build db backend
-# Open http://localhost:8000/docs
+docker compose ps             # both should be (healthy)
 
-# Train inside the trainer container:
-docker compose --profile training run --rm trainer \
-   --data-dir /workspace/data --epochs 50
+# Confirm the model loaded a real checkpoint (NOT random weights)
+curl http://localhost:8000/api/health    # expect "model_loaded": true
+
+# Launch the desktop GUI
+python -m app.main
 ```
 
-### Option C — Build a standalone `.exe`
+> **Important:** unlike the original design, the system **does not** fall
+> back to random weights. If no trained checkpoint is present the
+> Predictor raises `NoTrainedModelError` rather than silently producing
+> garbage. Ensure `backend/model/checkpoints/best.pt` exists (training
+> writes it; it is retained, not renamed away).
+
+### Train (only needed for the estimator / insole head)
 
 ```bash
-make build-exe        # output -> dist/InsoleFootClassification/
+# 1. Place the consolidated measurement workbook
+#    -> data/Sheet/measurements_consolidated.xlsx
+# 2. ALWAYS verify before training:
+docker compose exec backend python scripts/verify_dataset.py
+#    expect: 5/5 classes populated, 0 duplicate patients
+# 3. Train via the GUI Training tab, or:
+docker compose exec backend python scripts/train.py --epochs 50
 ```
 
-On Windows this produces a `.exe` you can ship; on macOS a `.app` bundle;
-on Linux a single-folder ELF binary.
+Training is **not required** for the core (measured) classification — that
+path is a deterministic rule. Train only to improve the assistive
+estimator and the insole-config head.
+
+### Build a standalone `.exe` (Windows)
+
+```bash
+pip install pyinstaller
+python app/build_exe.py        # -> dist/InsoleFootClassification/
+```
+
+The hardened build script verifies a checkpoint exists, confirms the
+binary was produced, and bundles `best.pt` so first launch works.
+
+---
+
+## Verification & diagnostics (reproducible)
+
+These scripts are permanent parts of the codebase. They exist so that any
+claim about the system can be independently re-checked — a discipline
+adopted after early development produced several misleading "100%"
+results.
+
+```bash
+# Dataset soundness: class balance, view coverage, patient-leakage check
+docker compose exec backend python scripts/verify_dataset.py
+
+# Model characterisation: confusion matrix + the
+# measured / image-only / measurement-only accuracy decomposition
+docker compose exec backend python scripts/diagnose_model.py
+```
+
+Expected headline results (held-out split):
+
+| Probe | Accuracy |
+|---|---|
+| Rule on true measurements (no ML) | ≈ 100% |
+| Model with measurements present | ≈ 88% |
+| Model images-only | ≈ 33% |
+
+The first row is the delivered behaviour. The third is why image-only
+classification is exposed only as an assistive, flagged path.
 
 ---
 
@@ -144,201 +192,128 @@ on Linux a single-folder ELF binary.
 
 ```
 insole-foot-classification/
-├── app/                                # Frontend (PySide6 desktop GUI)
+├── app/                                # PySide6 desktop GUI
 │   ├── main.py                         # Entry point
-│   ├── config.py                       # GUI config + paths
-│   ├── build_exe.py                    # PyInstaller packager
+│   ├── build_exe.py                    # Hardened PyInstaller packager
 │   └── ui/
-│       ├── main_window.py              # QMainWindow + tabs + menu
-│       ├── tabs/
-│       │   ├── classification_tab.py   # PRIMARY tab — matches brief layout
-│       │   └── training_tab.py         # SECONDARY tab — training console
-│       ├── widgets/
-│       │   ├── image_dropzone.py       # Drag-and-drop image tile
-│       │   ├── measurement_panel.py    # 5 angle/height inputs
-│       │   ├── results_panel.py        # Class probs + insole config display
-│       │   └── log_console.py
-│       ├── workers/
-│       │   ├── inference_worker.py     # QThread, falls back to local model
-│       │   └── training_worker.py      # QThread wrapping the Trainer
-│       └── theme/                      # Dark palette + stylesheet
+│       ├── tabs/                       # classification_tab, training_tab
+│       ├── widgets/                    # dropzone, measurement_panel,
+│       │                               #   results_panel (provenance banner)
+│       ├── workers/                    # inference + training QThreads
+│       └── theme/
 │
 ├── backend/
-│   ├── model/                          # The AI itself
-│   │   ├── config.py                   # ModelConfig / TrainingConfig dataclasses
-│   │   ├── architectures/
-│   │   │   ├── view_encoder.py         # Per-view CNN (timm-backed)
-│   │   │   ├── fusion_network.py       # Cross-modal transformer fusion
-│   │   │   ├── generative_vae.py       # Conditional VAE + InsoleConfigHead
-│   │   │   ├── measurement_predictor.py# Angle regression head
-│   │   │   └── classifier.py           # MultiViewFootClassifier (top-level)
+│   ├── model/
+│   │   ├── config.py                   # CLASS_NAMES, ARCH_HEIGHT_BANDS
+│   │   ├── architectures/              # encoders, fusion, VAE, heads
 │   │   ├── data/
-│   │   │   ├── dataset.py              # Walks the Drive folder structure
-│   │   │   ├── transforms.py           # Albumentations train/eval pipelines
-│   │   │   └── dataloader.py           # Stratified split + balanced sampler
-│   │   ├── training/
-│   │   │   ├── losses.py               # Multi-task loss (CE + Smooth-L1 + KL)
-│   │   │   ├── metrics.py              # Acc, macro-F1, confusion matrix
-│   │   │   └── trainer.py              # Mixed precision, ES, checkpoints
+│   │   │   ├── dataset.py              # multi-sheet consolidation,
+│   │   │   │                           #   mm→cm, measurement-derived labels
+│   │   │   ├── transforms.py
+│   │   │   └── dataloader.py           # stratified split + safe sampler
+│   │   ├── training/                   # losses, metrics, trainer
 │   │   ├── inference/
-│   │   │   └── predictor.py            # Stateful Predictor + rule-based check
-│   │   ├── preprocessing/
-│   │   │   └── image_processor.py      # EXIF-aware loading, letterbox pad
-│   │   ├── utils/                      # Checkpoint + seeding helpers
-│   │   └── checkpoints/                # Trained weights live here
+│   │   │   └── predictor.py            # MEASUREMENT-FIRST; no random fallback
+│   │   └── utils/checkpoint.py         # best.pt-priority selector
 │   │
-│   ├── database/                       # PostgreSQL + Prisma + SQLAlchemy
-│   │   ├── schema.prisma               # Source-of-truth schema
-│   │   ├── models.py                   # SQLAlchemy ORM (runtime)
-│   │   ├── schemas.py                  # Pydantic API I/O
-│   │   ├── connection.py               # Engine + session factory
-│   │   ├── repositories/
-│   │   │   ├── patient_repo.py
-│   │   │   ├── classification_repo.py
-│   │   │   └── training_run_repo.py
-│   │   └── migrations/                 # Alembic
-│   │       ├── env.py
-│   │       └── versions/0001_initial.py
+│   ├── database/                       # SQLAlchemy + Alembic + Pydantic
+│   │   ├── connection.py               # SA 2.0 text()-safe
+│   │   ├── schemas.py                  # + classification_source
+│   │   └── repositories/
 │   │
-│   └── server/                         # FastAPI HTTP layer
-│       ├── main.py                     # App factory + lifespan
-│       ├── middleware.py               # Request-ID + logging
-│       ├── dependencies.py
-│       ├── utils/file_handler.py
-│       └── routes/
-│           ├── health.py               # /api/health
-│           ├── classification.py       # /api/classify
-│           ├── training.py             # /api/training/runs
-│           ├── data_router.py          # /api/data/summary
-│           └── patients.py             # /api/patients
+│   └── server/                         # FastAPI
+│       └── routes/                     # health, classification, training,
+│                                       #   data_router, patients
 │
-├── data/                               # Dataset (mirrors Drive folder)
-│   ├── Heel/  Flat/  Normal/  Sheet/   #  ← per the brief
+├── data/
+│   ├── Heel/  Flat/  Normal/  Sheet/   # images by cohort + measurement xlsx
 │   └── README.md
 │
-├── docker/
-│   ├── Dockerfile.backend              # FastAPI + ML image
-│   ├── Dockerfile.trainer              # CLI training image
-│   └── postgres-init.sql               # uuid-ossp + pgcrypto + tz=UTC
-│
+├── docker/                             # Dockerfile.backend (+trainer),
+│                                       #   postgres-init.sql
 ├── scripts/
-│   ├── train.py                        # CLI: train a model
-│   ├── predict.py                      # CLI: predict on three images
-│   ├── prepare_data.py                 # CLI: scan + manifest
-│   ├── seed_demo_data.py               # CLI: seed Postgres with demo rows
-│   └── export_onnx.py                  # CLI: torch -> ONNX
-│
-├── tests/
-│   ├── test_model.py
-│   ├── test_dataset.py
-│   └── test_api.py
+│   ├── verify_dataset.py               # RUN BEFORE TRAINING
+│   ├── diagnose_model.py               # reproduces the evidence
+│   ├── train.py  predict.py  prepare_data.py  seed_demo_data.py
+│   └── export_onnx.py
 │
 ├── docker-compose.yml                  # db + backend + trainer + pgadmin
-├── alembic.ini
-├── Makefile                            # `make help`
-├── pyproject.toml
-├── requirements.txt
-├── requirements-dev.txt
-├── .env.example
-└── .gitignore
-```
-
----
-
-## Common commands
-
-```bash
-make help              # show every target
-make app               # launch desktop GUI
-make api               # uvicorn dev server with reload
-make train EPOCHS=20   # train (override hyper-params on the CLI)
-make test              # run pytest
-make lint              # ruff + black --check
-make format            # auto-format
-make build-exe         # bundle desktop app via PyInstaller
-make docker-up         # docker compose up -d db backend
-make docker-train      # one-shot training job in a container
+│                                       #   (shm_size 4gb; INSOLE_FORCE_WORKERS=0)
+├── alembic.ini  pyproject.toml
+├── requirements.txt  .env.example  .gitignore
+└── README.md
 ```
 
 ---
 
 ## API reference (excerpt)
 
-| Endpoint                  | Method | Description                                   |
-| ------------------------- | ------ | --------------------------------------------- |
-| `/api/health`             | GET    | Liveness + model + DB status                  |
-| `/api/classify`           | POST   | Multipart: lateral/top/back images + measurements_json |
-| `/api/training/runs`      | POST   | Kick off a training run                       |
-| `/api/training/runs`      | GET    | List recent training runs                     |
-| `/api/training/runs/{id}` | GET    | Status of a single run                        |
-| `/api/data/summary`       | GET    | Scan `data/` and report counts                |
-| `/api/patients`           | POST/GET | Patient CRUD                                |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/health` | GET | Liveness + `model_loaded` + DB status |
+| `/api/classify` | POST | Multipart: optional images + `measurements_json`; returns class, **`classification_source`** (`measured`/`image_estimated`), probabilities, estimated measurements, insole config |
+| `/api/training/runs` | POST | Start a training run (threaded in backend) |
+| `/api/training/runs` | GET | List recent runs |
+| `/api/training/runs/{id}` | GET | Run status + live per-epoch history |
+| `/api/data/summary` | GET | Scan `data/` and report counts |
+| `/api/patients` | POST/GET | Patient records |
 
-Interactive Swagger UI at `http://localhost:8000/docs`.
+Swagger UI at `http://localhost:8000/docs`.
 
 ---
 
 ## Database
 
-The canonical schema is `backend/database/schema.prisma`. SQLAlchemy
-models in `models.py` mirror it 1:1. Migrations are managed with
-Alembic.
-
-Tables:
-
-- `patients` — anonymised by patient code (e.g. `P1097`)
-- `classifications` — one row per inference run
-- `measurements` — clinician-entered or imported measurement records
-- `training_runs` — full audit trail of every training experiment
-
-To bootstrap a fresh DB:
+Tables: `patients` (by patient code, e.g. `P1097`), `classifications`
+(one row per inference, includes the provenance flag), `measurements`,
+`training_runs` (full audit trail). Migrations via Alembic.
 
 ```bash
-make docker-up        # starts postgres
-make migrate          # alembic upgrade head
-make seed-db          # optional: demo data
+docker compose up -d db
+docker compose exec backend alembic upgrade head
 ```
 
 ---
 
 ## Configuration
 
-All runtime config goes through environment variables (see
-`.env.example`). The most relevant:
+Runtime config via environment variables (see `.env.example`):
 
-| Variable                  | Default                                  | Purpose                |
-| ------------------------- | ---------------------------------------- | ---------------------- |
-| `DATABASE_URL`            | derived from `POSTGRES_*`                | SQLAlchemy DSN         |
-| `API_PORT`                | `8000`                                   | FastAPI port           |
-| `DATA_DIR`                | `./data`                                 | Dataset root           |
-| `DEFAULT_CHECKPOINT_PATH` | `./backend/model/checkpoints/best.pt`    | Loaded at API startup  |
-| `MAX_UPLOAD_MB`           | `25`                                     | Per-image upload limit |
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | derived from `POSTGRES_*` | SQLAlchemy DSN |
+| `POSTGRES_PORT` | `5432` | Host port (set `5433` if 5432 is in use) |
+| `API_PORT` | `8000` | FastAPI port |
+| `DATA_DIR` | `/workspace/data` | Dataset root (in container) |
+| `DEFAULT_CHECKPOINT_PATH` | `backend/model/checkpoints/best.pt` | Loaded at startup |
+| `INSOLE_FORCE_WORKERS` | `0` | DataLoader workers (0 in containers) |
+
+A single configurable knob, `ARCH_HEIGHT_MM_TO_CM` in
+`backend/model/data/dataset.py`, controls the millimetre→centimetre
+conversion for measurement sheets. Change it only if a cohort is
+confirmed to use a different unit.
 
 ---
 
-## Training tips
+## Known limitations (verified, documented)
 
-- **First run**: `make prepare-data` first — it prints how many patients,
-  per-class counts, and surfaces any missing measurements before you
-  burn 50 epochs.
-- **Class imbalance**: handled automatically via `WeightedRandomSampler`
-  + class-frequency-weighted cross-entropy.
-- **Multi-task signal**: even when only a fraction of patients have
-  measurements, the measurement-regression head still learns from those
-  rows (mask-weighted).
-- **Mixed precision**: enabled by default on CUDA; ignored on CPU/MPS.
-- **Early stopping**: triggered after `early_stopping_patience` epochs
-  without val-acc improvement (default 10).
+- **Image-only classification is unreliable** for this dataset because
+  arch height is not visually encoded in the supplied views. It is
+  exposed only as an assistive, clearly-flagged estimate.
+- **Estimated measurements are approximate** and must be confirmed by a
+  clinical measurement before use.
+- Class boundaries follow the project's fixed arch-height bands; changing
+  them requires a central configuration change.
 
 ---
 
 ## Confidentiality
 
-Per the project brief, the dataset, trained checkpoints, and outputs are
-**confidential and remain the property of the project owner**. The
+Per the project agreement, the dataset, trained checkpoints, and outputs
+are **confidential and remain the property of the project owner**. The
 `.gitignore` excludes `data/Heel/*`, `data/Flat/*`, `data/Normal/*`,
-`data/Sheet/*`, and `backend/model/checkpoints/*.pt` to prevent
-accidental commits. Do not push the trained model to a public registry.
+`data/Sheet/*`, and `backend/model/checkpoints/*.pt`. Do not push data or
+trained models to any external or public registry.
 
 ---
 

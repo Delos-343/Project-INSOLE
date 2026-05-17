@@ -1,4 +1,4 @@
-# AI Insole Foot Classification — Delivery Package
+# Insole Foot Classification — Delivery Package
 
 This is the final handoff package. Engineering of the core deliverable is
 functionally complete and verified. Closing the project requires a few
