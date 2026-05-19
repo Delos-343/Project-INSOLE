@@ -315,7 +315,7 @@ class ResultsPanel(QFrame):
             self.meas_box.setTitle("Measurements (from consolidated records)")
         elif src == "sheet" and not agree:
             self.banner.setText(
-                "⚑  BOUNDARY — review.\n"
+                "⚑  BOUNDARY.\n\n"
                 "Found in records, but the arch-height and heel-angle rules "
                 "disagree by one class. Headline is the authoritative "
                 "arch-height class."
