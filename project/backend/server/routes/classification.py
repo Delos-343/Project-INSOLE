@@ -114,4 +114,7 @@ async def classify(
         measurements_estimated=(
             used if result.classification_source == "image_estimated" else {}
         ),
+        arch_class=result.arch_class,
+        heel_class=result.heel_class,
+        rules_agree=result.rules_agree,
     )

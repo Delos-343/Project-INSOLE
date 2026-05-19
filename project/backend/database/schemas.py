@@ -53,6 +53,14 @@ class ClassificationOut(BaseModel):
     classification_source: str = "measured"
     measurements_estimated: dict[str, float] = Field(default_factory=dict)
 
+    # --- Sheet-lookup revision: dual-rule detail ---
+    # arch_class  -> authoritative class from the arch-height bands
+    # heel_class  -> corroborating class from the heel-angle bands
+    # rules_agree -> False flags a one-class boundary disagreement
+    arch_class: str | None = None
+    heel_class: str | None = None
+    rules_agree: bool = True
+
 
 class PatientIn(BaseModel):
     code: str
