@@ -1,20 +1,21 @@
 """
-ResultsPanel (revision 2026-05, spacing pass).
+ResultsPanel (revision 2026-05, spacing pass 2).
 
-Same behaviour as before (SHEET / BOUNDARY / ESTIMATED provenance, dual-rule
-display, always-populated measurements). This revision ONLY changes the
-visual spacing so nothing hugs anything:
+Fixes the two remaining issues visible in the rendered window:
 
-  * Panel outer padding increased to 28 px so content never touches the
-    rounded border.
-  * A consistent vertical rhythm: SECTION_GAP (22 px) between every major
-    block (banner -> headline -> chips -> each group box).
-  * Group boxes carry their own internal padding (TOP 30 / sides 18 /
-    bottom 18) and a title that sits clear of the frame, plus an explicit
-    margin-top on the QGroupBox so the title text doesn't collide with the
-    preceding section.
-  * Rows inside group boxes use ROW_GAP (8 px) and per-row vertical pad so
-    label/value pairs are not cramped.
+  1. Rows inside group boxes were inheriting the panel's dark fill, so each
+     label/value row painted its own rectangle and the rows looked like
+     cramped stacked sub-cards. Every inner row container is now an
+     explicitly transparent QWidget with its own vertical padding, so the
+     group box reads as one clean card with airy rows.
+
+  2. Group-box titles sat almost on top of the preceding section. The
+     inter-section gap and the group box's reserved title margin are both
+     increased so each title clearly belongs to its own card with space
+     above it.
+
+Behaviour (SHEET / BOUNDARY / ESTIMATED provenance, dual-rule display,
+always-populated measurements) is unchanged.
 """
 
 from __future__ import annotations
@@ -33,13 +34,13 @@ from PySide6.QtWidgets import (
 
 from app.ui.theme.colors import PALETTE as P
 
-# ---- spacing system (single source of truth) ----
-PANEL_PAD = 28      # inside the results panel, away from the rounded border
-SECTION_GAP = 22    # between banner / headline / chips / each group box
-GROUP_TOP = 30      # inside a group box, below its title
-GROUP_SIDE = 18
-GROUP_BOTTOM = 18
-ROW_GAP = 8
+# ---- spacing system ----
+PANEL_PAD = 28
+SECTION_GAP = 30        # ↑ between major blocks / group boxes
+GROUP_TOP = 34          # ↑ inside a group box, below its title
+GROUP_SIDE = 20
+GROUP_BOTTOM = 20
+ROW_VPAD = 7            # vertical padding inside every label/value row
 
 
 def _sev_color(b: str) -> str:
@@ -48,19 +49,19 @@ def _sev_color(b: str) -> str:
 
 
 def _groupbox_qss() -> str:
-    # Margin-top reserves space so the title label clears the previous
-    # section; padding-top pushes inner content below the title line.
+    # 22px top margin reserves clear space for the title ABOVE the frame so
+    # it never collides with the previous section.
     return (
         f"QGroupBox {{"
         f"  border: 1px solid {P.border};"
         f"  border-radius: 10px;"
-        f"  margin-top: 14px;"
-        f"  background: {P.bg_secondary};"
+        f"  margin-top: 22px;"
+        f"  background-color: {P.bg_secondary};"
         f"}}"
         f"QGroupBox::title {{"
         f"  subcontrol-origin: margin;"
         f"  subcontrol-position: top left;"
-        f"  left: 14px;"
+        f"  left: 16px;"
         f"  padding: 0 6px;"
         f"  color: {P.text_secondary};"
         f"  font-size: 12px;"
@@ -69,12 +70,23 @@ def _groupbox_qss() -> str:
     )
 
 
+def _row() -> tuple[QWidget, QHBoxLayout]:
+    """A transparent row container with its own vertical padding so rows
+    breathe and never paint their own background rectangle."""
+    w = QWidget()
+    w.setStyleSheet("background: transparent;")
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, ROW_VPAD, 0, ROW_VPAD)
+    lay.setSpacing(12)
+    return w, lay
+
+
 class ResultsPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("resultsPanel")
         self.setStyleSheet(
-            f"#resultsPanel{{background:{P.bg_secondary};"
+            f"#resultsPanel{{background-color:{P.bg_secondary};"
             f"border:1px solid {P.border};border-radius:12px;}}"
         )
         self._build()
@@ -85,53 +97,52 @@ class ResultsPanel(QFrame):
         o.setContentsMargins(PANEL_PAD, PANEL_PAD, PANEL_PAD, PANEL_PAD)
         o.setSpacing(SECTION_GAP)
 
-        t = QLabel("Results")
-        t.setObjectName("subtitleLabel")
+        t = QLabel("RESULTS")
         t.setStyleSheet(
             f"color:{P.text_muted};font-size:11px;font-weight:700;"
-            f"letter-spacing:2px;"
+            f"letter-spacing:2px;background:transparent;"
         )
         o.addWidget(t)
 
-        # Provenance banner
         self.banner = QLabel("—")
         self.banner.setWordWrap(True)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.banner.setMinimumHeight(54)
+        self.banner.setMinimumHeight(56)
         o.addWidget(self.banner)
 
-        # Headline
         self.headline = QLabel("—")
-        self.headline.setObjectName("titleLabel")
         self.headline.setStyleSheet(
             f"color:{P.text_primary};font-size:26px;font-weight:700;"
+            f"background:transparent;"
         )
         o.addWidget(self.headline)
 
-        # Severity chip + confidence
-        chips = QHBoxLayout()
-        chips.setSpacing(12)
+        chips = QWidget()
+        chips.setStyleSheet("background:transparent;")
+        cl = QHBoxLayout(chips)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(12)
         self.sev_chip = QLabel("—")
         self.sev_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sev_chip.setMinimumWidth(96)
         self.sev_chip.setStyleSheet(self._chip(P.text_muted))
-        chips.addWidget(self.sev_chip)
+        cl.addWidget(self.sev_chip)
         self.conf = QLabel("Confidence —")
-        self.conf.setStyleSheet(f"color:{P.text_secondary};font-size:13px;")
-        chips.addWidget(self.conf)
-        chips.addStretch()
-        chip_wrap = QWidget()
-        chip_wrap.setLayout(chips)
-        o.addWidget(chip_wrap)
+        self.conf.setStyleSheet(
+            f"color:{P.text_secondary};font-size:13px;background:transparent;"
+        )
+        cl.addWidget(self.conf)
+        cl.addStretch()
+        o.addWidget(chips)
 
-        # Scrollable body
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
         body = QWidget()
+        body.setStyleSheet("background:transparent;")
         b = QVBoxLayout(body)
-        b.setContentsMargins(0, 0, 6, 0)   # 6px so content clears the scrollbar
+        b.setContentsMargins(0, 0, 8, 0)
         b.setSpacing(SECTION_GAP)
 
         # --- Classification rules ---
@@ -139,13 +150,17 @@ class ResultsPanel(QFrame):
         self.rules_box.setStyleSheet(_groupbox_qss())
         rl = QVBoxLayout(self.rules_box)
         rl.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
-        rl.setSpacing(ROW_GAP)
+        rl.setSpacing(0)
         self.arch_lbl = QLabel("Arch-height rule: —")
         self.heel_lbl = QLabel("Heel-angle rule: —")
         for w in (self.arch_lbl, self.heel_lbl):
-            w.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            rw, rlay = _row()
+            w.setStyleSheet(
+                f"color:{P.text_secondary};font-size:12px;background:transparent;"
+            )
             w.setWordWrap(True)
-            rl.addWidget(w)
+            rlay.addWidget(w)
+            rl.addWidget(rw)
         b.addWidget(self.rules_box)
 
         # --- Class probabilities ---
@@ -153,15 +168,16 @@ class ResultsPanel(QFrame):
         pb.setStyleSheet(_groupbox_qss())
         pl = QVBoxLayout(pb)
         pl.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
-        pl.setSpacing(ROW_GAP + 2)
+        pl.setSpacing(0)
         self.prob_rows = {}
         for c in ("Severe Flat Arch", "Flat Arch", "Normal Foot",
                   "High Arch", "Severe High Arch"):
-            r = QHBoxLayout()
-            r.setSpacing(12)
+            rw, r = _row()
             n = QLabel(c)
             n.setMinimumWidth(140)
-            n.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            n.setStyleSheet(
+                f"color:{P.text_secondary};font-size:12px;background:transparent;"
+            )
             bar = QProgressBar()
             bar.setRange(0, 100)
             bar.setTextVisible(False)
@@ -169,11 +185,13 @@ class ResultsPanel(QFrame):
             v = QLabel("0.0%")
             v.setMinimumWidth(52)
             v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            v.setStyleSheet(f"color:{P.text_primary};font-size:12px;")
+            v.setStyleSheet(
+                f"color:{P.text_primary};font-size:12px;background:transparent;"
+            )
             r.addWidget(n)
             r.addWidget(bar, 1)
             r.addWidget(v)
-            pl.addLayout(r)
+            pl.addWidget(rw)
             self.prob_rows[c] = (bar, v)
         b.addWidget(pb)
 
@@ -182,7 +200,7 @@ class ResultsPanel(QFrame):
         self.meas_box.setStyleSheet(_groupbox_qss())
         ml = QVBoxLayout(self.meas_box)
         ml.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
-        ml.setSpacing(ROW_GAP)
+        ml.setSpacing(0)
         self.meas_labels = {}
         self._mk = [
             ("calcaneal_inclination_deg", "Calcaneal inclination", "°"),
@@ -192,20 +210,22 @@ class ResultsPanel(QFrame):
             ("first_metatarsal_talus_deg", "1st metatarsal–talus", "°"),
         ]
         for k, lbl, unit in self._mk:
-            row = QHBoxLayout()
-            row.setSpacing(10)
+            rw, row = _row()
             a = QLabel(lbl)
-            a.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            a.setStyleSheet(
+                f"color:{P.text_secondary};font-size:12px;background:transparent;"
+            )
             val = QLabel(f"— {unit}")
             val.setAlignment(Qt.AlignmentFlag.AlignRight)
             val.setStyleSheet(
                 f"color:{P.text_primary};font-size:13px;font-weight:600;"
+                f"background:transparent;"
             )
             self.meas_labels[k] = val
             row.addWidget(a)
             row.addStretch()
             row.addWidget(val)
-            ml.addLayout(row)
+            ml.addWidget(rw)
         b.addWidget(self.meas_box)
 
         # --- Insole config ---
@@ -213,7 +233,7 @@ class ResultsPanel(QFrame):
         ib.setStyleSheet(_groupbox_qss())
         il = QVBoxLayout(ib)
         il.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
-        il.setSpacing(ROW_GAP + 2)
+        il.setSpacing(0)
         self.insole_rows = {}
         for k, lbl in [
             ("arch_support_height", "Arch support height"),
@@ -222,27 +242,27 @@ class ResultsPanel(QFrame):
             ("lateral_wedge_strength", "Lateral wedge strength"),
             ("forefoot_cushioning", "Forefoot cushioning"),
         ]:
-            r = QHBoxLayout()
-            r.setSpacing(12)
+            rw, r = _row()
             a = QLabel(lbl)
             a.setMinimumWidth(170)
-            a.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            a.setStyleSheet(
+                f"color:{P.text_secondary};font-size:12px;background:transparent;"
+            )
             bar = QProgressBar()
             bar.setRange(0, 100)
             bar.setTextVisible(False)
             bar.setFixedHeight(6)
             r.addWidget(a)
             r.addWidget(bar, 1)
-            il.addLayout(r)
+            il.addWidget(rw)
             self.insole_rows[k] = bar
         b.addWidget(ib)
 
-        # Notes
         self.notes = QLabel("")
         self.notes.setWordWrap(True)
         self.notes.setStyleSheet(
             f"color:{P.text_muted};font-size:11px;font-style:italic;"
-            f"padding-top:4px;"
+            f"padding-top:6px;background:transparent;"
         )
         b.addWidget(self.notes)
         b.addStretch()
@@ -250,18 +270,16 @@ class ResultsPanel(QFrame):
         scroll.setWidget(body)
         o.addWidget(scroll, 1)
 
-    # ----------------------------------------------------------- styles
     def _chip(self, c):
-        return (f"background:{c}22;color:{c};font-weight:700;font-size:10px;"
-                f"letter-spacing:2px;text-transform:uppercase;"
+        return (f"background-color:{c}22;color:{c};font-weight:700;"
+                f"font-size:10px;letter-spacing:2px;text-transform:uppercase;"
                 f"border:1px solid {c}66;border-radius:999px;padding:6px 14px;")
 
     def _ban(self, c):
-        return (f"background:{c}1F;color:{c};border:1px solid {c}80;"
+        return (f"background-color:{c}1F;color:{c};border:1px solid {c}80;"
                 f"border-radius:8px;padding:14px 18px;font-size:12px;"
                 f"font-weight:600;")
 
-    # ----------------------------------------------------------- state
     def clear(self):
         self.banner.setText("Awaiting input")
         self.banner.setStyleSheet(self._ban(P.text_muted))
@@ -325,7 +343,7 @@ class ResultsPanel(QFrame):
         self.heel_lbl.setText(f"Heel-angle rule (corroborating): {hc or 'n/a'}")
         self.heel_lbl.setStyleSheet(
             f"color:{P.danger if (hc and not agree) else P.text_secondary};"
-            f"font-size:12px;"
+            f"font-size:12px;background:transparent;"
         )
 
         probs = r.get("class_probabilities") or {}
@@ -335,9 +353,10 @@ class ResultsPanel(QFrame):
             v.setText(f"{p*100:0.1f}%")
             chunk = col if name == cls else P.accent_muted
             bar.setStyleSheet(
-                f"QProgressBar{{background:{P.bg_tertiary};border:none;"
+                f"QProgressBar{{background-color:{P.bg_tertiary};border:none;"
                 f"border-radius:3px;}}"
-                f"QProgressBar::chunk{{background:{chunk};border-radius:3px;}}"
+                f"QProgressBar::chunk{{background-color:{chunk};"
+                f"border-radius:3px;}}"
             )
 
         units = {"calcaneal_inclination_deg": "°", "heel_angle_deg": "°",

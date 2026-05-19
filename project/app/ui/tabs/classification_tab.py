@@ -71,7 +71,7 @@ class ClassificationTab(QWidget):
 
         sub = QLabel("Classify")
         sub.setObjectName("subtitleLabel")
-        title = QLabel("Foot image analysis")
+        title = QLabel("Foot Image Analysis")
         title.setObjectName("titleLabel")
         hint = QLabel(
             "Enter the patient code and upload the foot views. Clinical "

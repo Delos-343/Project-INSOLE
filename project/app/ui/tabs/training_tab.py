@@ -85,7 +85,7 @@ class TrainingTab(QWidget):
         # Header
         h_sub = QLabel("Train")
         h_sub.setObjectName("subtitleLabel")
-        h_title = QLabel("Model training pipeline")
+        h_title = QLabel("Model Training Pipeline")
         h_title.setObjectName("titleLabel")
         h_hint = QLabel(
             "Train the multi-view foot classifier on the dataset under "
