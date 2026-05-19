@@ -1,18 +1,20 @@
 """
-ResultsPanel (revision 2026-05).
+ResultsPanel (revision 2026-05, spacing pass).
 
-Provenance banner now has three states:
-  * SHEET (green)      — measurements looked up from the consolidated
-                         records; deterministic dual-rule classification.
-  * BOUNDARY (blue)    — found in sheet, but the arch-height and heel-angle
-                         rules disagree by one class; headline is the
-                         authoritative arch-height class, flagged for review.
-  * ESTIMATED (amber)  — patient not in the sheet; arch height estimated
-                         from images; assistive only.
+Same behaviour as before (SHEET / BOUNDARY / ESTIMATED provenance, dual-rule
+display, always-populated measurements). This revision ONLY changes the
+visual spacing so nothing hugs anything:
 
-The empty-measurements bug (revision B2) is fixed: when source is "sheet"
-the looked-up values are always shown; when "image_estimated" they are
-shown tagged (est.). They are never blank when a result exists.
+  * Panel outer padding increased to 28 px so content never touches the
+    rounded border.
+  * A consistent vertical rhythm: SECTION_GAP (22 px) between every major
+    block (banner -> headline -> chips -> each group box).
+  * Group boxes carry their own internal padding (TOP 30 / sides 18 /
+    bottom 18) and a title that sits clear of the frame, plus an explicit
+    margin-top on the QGroupBox so the title text doesn't collide with the
+    preceding section.
+  * Rows inside group boxes use ROW_GAP (8 px) and per-row vertical pad so
+    label/value pairs are not cramped.
 """
 
 from __future__ import annotations
@@ -31,10 +33,40 @@ from PySide6.QtWidgets import (
 
 from app.ui.theme.colors import PALETTE as P
 
+# ---- spacing system (single source of truth) ----
+PANEL_PAD = 28      # inside the results panel, away from the rounded border
+SECTION_GAP = 22    # between banner / headline / chips / each group box
+GROUP_TOP = 30      # inside a group box, below its title
+GROUP_SIDE = 18
+GROUP_BOTTOM = 18
+ROW_GAP = 8
+
 
 def _sev_color(b: str) -> str:
     return {"normal": P.severity_normal, "moderate": P.severity_moderate,
             "severe": P.severity_severe}.get(b, P.text_muted)
+
+
+def _groupbox_qss() -> str:
+    # Margin-top reserves space so the title label clears the previous
+    # section; padding-top pushes inner content below the title line.
+    return (
+        f"QGroupBox {{"
+        f"  border: 1px solid {P.border};"
+        f"  border-radius: 10px;"
+        f"  margin-top: 14px;"
+        f"  background: {P.bg_secondary};"
+        f"}}"
+        f"QGroupBox::title {{"
+        f"  subcontrol-origin: margin;"
+        f"  subcontrol-position: top left;"
+        f"  left: 14px;"
+        f"  padding: 0 6px;"
+        f"  color: {P.text_secondary};"
+        f"  font-size: 12px;"
+        f"  font-weight: 600;"
+        f"}}"
+    )
 
 
 class ResultsPanel(QFrame):
@@ -50,65 +82,83 @@ class ResultsPanel(QFrame):
 
     def _build(self):
         o = QVBoxLayout(self)
-        o.setContentsMargins(20, 20, 20, 20)
-        o.setSpacing(12)
+        o.setContentsMargins(PANEL_PAD, PANEL_PAD, PANEL_PAD, PANEL_PAD)
+        o.setSpacing(SECTION_GAP)
+
         t = QLabel("Results")
         t.setObjectName("subtitleLabel")
+        t.setStyleSheet(
+            f"color:{P.text_muted};font-size:11px;font-weight:700;"
+            f"letter-spacing:2px;"
+        )
         o.addWidget(t)
 
+        # Provenance banner
         self.banner = QLabel("—")
         self.banner.setWordWrap(True)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.banner.setMinimumHeight(46)
+        self.banner.setMinimumHeight(54)
         o.addWidget(self.banner)
 
+        # Headline
         self.headline = QLabel("—")
         self.headline.setObjectName("titleLabel")
+        self.headline.setStyleSheet(
+            f"color:{P.text_primary};font-size:26px;font-weight:700;"
+        )
         o.addWidget(self.headline)
 
+        # Severity chip + confidence
         chips = QHBoxLayout()
-        chips.setSpacing(10)
+        chips.setSpacing(12)
         self.sev_chip = QLabel("—")
         self.sev_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sev_chip.setMinimumWidth(90)
+        self.sev_chip.setMinimumWidth(96)
         self.sev_chip.setStyleSheet(self._chip(P.text_muted))
         chips.addWidget(self.sev_chip)
         self.conf = QLabel("Confidence —")
         self.conf.setStyleSheet(f"color:{P.text_secondary};font-size:13px;")
         chips.addWidget(self.conf)
         chips.addStretch()
-        o.addLayout(chips)
+        chip_wrap = QWidget()
+        chip_wrap.setLayout(chips)
+        o.addWidget(chip_wrap)
 
+        # Scrollable body
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
         body = QWidget()
         b = QVBoxLayout(body)
-        b.setContentsMargins(0, 4, 0, 0)
-        b.setSpacing(16)
+        b.setContentsMargins(0, 0, 6, 0)   # 6px so content clears the scrollbar
+        b.setSpacing(SECTION_GAP)
 
-        # Dual-rule summary
+        # --- Classification rules ---
         self.rules_box = QGroupBox("Classification rules")
+        self.rules_box.setStyleSheet(_groupbox_qss())
         rl = QVBoxLayout(self.rules_box)
-        rl.setContentsMargins(14, 24, 14, 14)
-        rl.setSpacing(6)
+        rl.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
+        rl.setSpacing(ROW_GAP)
         self.arch_lbl = QLabel("Arch-height rule: —")
         self.heel_lbl = QLabel("Heel-angle rule: —")
         for w in (self.arch_lbl, self.heel_lbl):
             w.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            w.setWordWrap(True)
             rl.addWidget(w)
         b.addWidget(self.rules_box)
 
-        # Probabilities
+        # --- Class probabilities ---
         pb = QGroupBox("Class probabilities")
+        pb.setStyleSheet(_groupbox_qss())
         pl = QVBoxLayout(pb)
-        pl.setContentsMargins(14, 24, 14, 14)
-        pl.setSpacing(6)
+        pl.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
+        pl.setSpacing(ROW_GAP + 2)
         self.prob_rows = {}
         for c in ("Severe Flat Arch", "Flat Arch", "Normal Foot",
                   "High Arch", "Severe High Arch"):
             r = QHBoxLayout()
-            r.setSpacing(10)
+            r.setSpacing(12)
             n = QLabel(c)
             n.setMinimumWidth(140)
             n.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
@@ -117,9 +167,9 @@ class ResultsPanel(QFrame):
             bar.setTextVisible(False)
             bar.setFixedHeight(6)
             v = QLabel("0.0%")
-            v.setMinimumWidth(50)
+            v.setMinimumWidth(52)
             v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            v.setStyleSheet(f"color:{P.text_primary};")
+            v.setStyleSheet(f"color:{P.text_primary};font-size:12px;")
             r.addWidget(n)
             r.addWidget(bar, 1)
             r.addWidget(v)
@@ -127,11 +177,12 @@ class ResultsPanel(QFrame):
             self.prob_rows[c] = (bar, v)
         b.addWidget(pb)
 
-        # Measurements (always populated when a result exists)
+        # --- Measurements ---
         self.meas_box = QGroupBox("Measurements")
+        self.meas_box.setStyleSheet(_groupbox_qss())
         ml = QVBoxLayout(self.meas_box)
-        ml.setContentsMargins(14, 24, 14, 14)
-        ml.setSpacing(4)
+        ml.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
+        ml.setSpacing(ROW_GAP)
         self.meas_labels = {}
         self._mk = [
             ("calcaneal_inclination_deg", "Calcaneal inclination", "°"),
@@ -142,12 +193,14 @@ class ResultsPanel(QFrame):
         ]
         for k, lbl, unit in self._mk:
             row = QHBoxLayout()
-            row.setSpacing(8)
+            row.setSpacing(10)
             a = QLabel(lbl)
             a.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
             val = QLabel(f"— {unit}")
             val.setAlignment(Qt.AlignmentFlag.AlignRight)
-            val.setStyleSheet(f"color:{P.text_primary};font-size:13px;")
+            val.setStyleSheet(
+                f"color:{P.text_primary};font-size:13px;font-weight:600;"
+            )
             self.meas_labels[k] = val
             row.addWidget(a)
             row.addStretch()
@@ -155,11 +208,12 @@ class ResultsPanel(QFrame):
             ml.addLayout(row)
         b.addWidget(self.meas_box)
 
-        # Insole config
+        # --- Insole config ---
         ib = QGroupBox("Recommended insole configuration")
+        ib.setStyleSheet(_groupbox_qss())
         il = QVBoxLayout(ib)
-        il.setContentsMargins(14, 24, 14, 14)
-        il.setSpacing(6)
+        il.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
+        il.setSpacing(ROW_GAP + 2)
         self.insole_rows = {}
         for k, lbl in [
             ("arch_support_height", "Arch support height"),
@@ -169,9 +223,9 @@ class ResultsPanel(QFrame):
             ("forefoot_cushioning", "Forefoot cushioning"),
         ]:
             r = QHBoxLayout()
-            r.setSpacing(10)
+            r.setSpacing(12)
             a = QLabel(lbl)
-            a.setMinimumWidth(160)
+            a.setMinimumWidth(170)
             a.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
             bar = QProgressBar()
             bar.setRange(0, 100)
@@ -183,26 +237,31 @@ class ResultsPanel(QFrame):
             self.insole_rows[k] = bar
         b.addWidget(ib)
 
+        # Notes
         self.notes = QLabel("")
         self.notes.setWordWrap(True)
         self.notes.setStyleSheet(
             f"color:{P.text_muted};font-size:11px;font-style:italic;"
+            f"padding-top:4px;"
         )
         b.addWidget(self.notes)
         b.addStretch()
+
         scroll.setWidget(body)
         o.addWidget(scroll, 1)
 
+    # ----------------------------------------------------------- styles
     def _chip(self, c):
         return (f"background:{c}22;color:{c};font-weight:700;font-size:10px;"
                 f"letter-spacing:2px;text-transform:uppercase;"
-                f"border:1px solid {c}66;border-radius:999px;padding:4px 12px;")
+                f"border:1px solid {c}66;border-radius:999px;padding:6px 14px;")
 
     def _ban(self, c):
         return (f"background:{c}1F;color:{c};border:1px solid {c}80;"
-                f"border-radius:8px;padding:10px 14px;font-size:12px;"
+                f"border-radius:8px;padding:14px 18px;font-size:12px;"
                 f"font-weight:600;")
 
+    # ----------------------------------------------------------- state
     def clear(self):
         self.banner.setText("Awaiting input")
         self.banner.setStyleSheet(self._ban(P.text_muted))
@@ -262,12 +321,8 @@ class ResultsPanel(QFrame):
 
         ac = r.get("arch_class")
         hc = r.get("heel_class")
-        self.arch_lbl.setText(
-            f"Arch-height rule (authoritative): {ac or '—'}"
-        )
-        self.heel_lbl.setText(
-            f"Heel-angle rule (corroborating): {hc or 'n/a'}"
-        )
+        self.arch_lbl.setText(f"Arch-height rule (authoritative): {ac or '—'}")
+        self.heel_lbl.setText(f"Heel-angle rule (corroborating): {hc or 'n/a'}")
         self.heel_lbl.setStyleSheet(
             f"color:{P.danger if (hc and not agree) else P.text_secondary};"
             f"font-size:12px;"
