@@ -231,3 +231,32 @@ class Predictor:
         tot = sum(mass.values()) or 1.0
         probs = {k: v / tot for k, v in mass.items()}
         return float(probs[CLASS_NAMES[idx]]), probs
+
+
+# ---------------------------------------------------------------------------
+# Module-level convenience function.
+#
+# The package __init__ files (backend/model/__init__.py and
+# backend/model/inference/__init__.py) import `predict` by name. The
+# revision rewrite must keep exporting it or the whole backend fails to
+# import at startup. Signature updated for the sheet-lookup-first design:
+# patient_code is the primary key; `measurements` is accepted and ignored
+# for backward compatibility with any old caller.
+# ---------------------------------------------------------------------------
+def predict(
+    lateral_path: str | Path | None = None,
+    top_path: str | Path | None = None,
+    back_path: str | Path | None = None,
+    patient_code: str | None = None,
+    sheet_path: str | Path | None = None,
+    cfg: InferenceConfig | None = None,
+    **_legacy: Any,
+) -> PredictionResult:
+    """One-shot predict helper. Builds a Predictor and runs it once."""
+    return Predictor(cfg).predict(
+        lateral_path=lateral_path,
+        top_path=top_path,
+        back_path=back_path,
+        patient_code=patient_code,
+        sheet_path=sheet_path,
+    )
