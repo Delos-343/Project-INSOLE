@@ -385,4 +385,6 @@ class ResultsPanel(QFrame):
             bar.setValue(int(round(float(insole.get(k, 0.0))*100)))
 
         notes = r.get("notes") or []
-        self.notes.setText("• " + "\n• ".join(notes) if notes else "")
+        # Blank line between bullets so multi-note results read as
+        # separate paragraphs rather than one wrapped block.
+        self.notes.setText("• " + "\n\n• ".join(notes) if notes else "")
