@@ -122,10 +122,6 @@ class ImageDropZone(QFrame):
         if pix.isNull():
             return
         self._image_path = path_str
-        # QLabel shows EITHER text OR a pixmap. The placeholder text set by
-        # clear() must be removed or it can suppress the new pixmap after a
-        # clear -> reload cycle. Clearing text first guarantees pixmap mode.
-        self.preview.clear()
         self._update_preview(pix)
         self.setProperty("filled", True)
         self.remove_btn.show()
@@ -135,6 +131,13 @@ class ImageDropZone(QFrame):
         self.image_changed.emit(path_str)
 
     def _update_preview(self, pix: QPixmap) -> None:
+        # Remove any placeholder text left over from a previous clear() so
+        # the QLabel reliably switches into pixmap mode on a reload cycle.
+        # (QLabel renders text OR a pixmap, not both.) Setting an empty
+        # string is safe here; QLabel.clear() is too aggressive and was
+        # observed to suppress the subsequent setPixmap on some Qt builds.
+        if self.preview.text():
+            self.preview.setText("")
         self.preview.setPixmap(
             pix.scaled(
                 self.preview.size(),

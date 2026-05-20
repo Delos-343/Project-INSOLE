@@ -71,12 +71,12 @@ class ClassificationTab(QWidget):
 
         sub = QLabel("Classify")
         sub.setObjectName("subtitleLabel")
-        title = QLabel("Foot Image Analysis")
+        title = QLabel("Patient Analysis")
         title.setObjectName("titleLabel")
         hint = QLabel(
             "Enter the patient code and upload the foot views. Clinical "
             "measurements are retrieved automatically from the consolidated "
-            "records — they are not entered by hand."
+            "records."
         )
         hint.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
         hint.setWordWrap(True)

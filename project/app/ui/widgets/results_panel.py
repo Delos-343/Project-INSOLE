@@ -312,7 +312,7 @@ class ResultsPanel(QFrame):
                 "deterministic dual-rule classification."
             )
             self.banner.setStyleSheet(self._ban(P.success))
-            self.meas_box.setTitle("Measurements (from consolidated records)")
+            self.meas_box.setTitle("Measurements")
         elif src == "sheet" and not agree:
             self.banner.setText(
                 "⚑  BOUNDARY.\n\n"
@@ -321,7 +321,7 @@ class ResultsPanel(QFrame):
                 "arch-height class."
             )
             self.banner.setStyleSheet(self._ban(P.accent))
-            self.meas_box.setTitle("Measurements (from consolidated records)")
+            self.meas_box.setTitle("Measurements")
         else:
             self.banner.setText(
                 "⚠  ESTIMATED — assistive only, NOT authoritative.\n"
